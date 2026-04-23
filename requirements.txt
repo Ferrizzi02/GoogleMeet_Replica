@@ -1,2 +1,3 @@
 zmq
 opencv-python
+pyaudio
