@@ -7,6 +7,7 @@ class Cliente:
         self.identity = identity
         self.room = room
         self.msgCallBack = msgCallBack
+        self.msg = ""
         self.context = zmq.Context()
 
         self.pub = self.context.socket(zmq.PUB)
@@ -33,9 +34,10 @@ class Cliente:
             _, user, msg = message.split("|", 2)
             if user != self.identity:
                 #print(f"\n[{user}]: {msg}")
-                self.msgCallBack(user,msg) #para a gui
+                self.msgCallBack(user,msg) #para o gui
 
     def enviarMsg(self):
-        msgPraEnviar = f"TXT/{self.room}|{self.identity}|{self.msg}"
-        self.pub.send_string(msgPraEnviar)
+        if self.msg:
+            msgPraEnviar = f"TXT/{self.room}|{self.identity}|{self.msg}"
+            self.pub.send_string(msgPraEnviar)
 

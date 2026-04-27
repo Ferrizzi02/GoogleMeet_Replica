@@ -1,3 +1,5 @@
 zmq
 opencv-python
 pyaudio
+ttkbootstrap
+pillow
