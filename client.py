@@ -2,40 +2,40 @@ import zmq
 import threading
 import sys
 
-def escutarMsg(identity, room):
-    context = zmq.Context()
-    subscriber = context.socket(zmq.SUB)
-    subscriber.connect("tcp://localhost:5556")
+class Cliente:
+    def __init__(self, identity, room, msgCallBack):
+        self.identity = identity
+        self.room = room
+        self.msgCallBack = msgCallBack
+        self.context = zmq.Context()
 
-    #se increve no topico texto
-    #OBS: Não sei se a logica tá certa, seria melhor por IDs de usuarios eu acho 
-    topico = f"TXT/{room}"
-    subscriber.setsockopt_string(zmq.SUBSCRIBE, topico)
+        self.pub = self.context.socket(zmq.PUB)
+        self.pub.connect("tcp://localhost:5555")        
 
-    print(f"[CLIENTE] incrito na sala {room}")
+    def threadEscuta(self):
+        thread_recv = threading.Thread(target=self.escutarMsg, args=(UserID, roomID), daemon=True)
+        thread_recv.start()
 
-    while True:
-        #recebe msg completa
-        message = subscriber.recv_string()
-        _, user, msg = message.split("|", 2)
-        if user != identity:
-            print(f"\n[{user}]: {msg}")
+    def escutarMsg(self):
+        subscriber = self.context.socket(zmq.SUB)
+        subscriber.connect("tcp://localhost:5556")
 
-def enviarMsg(identity, room):
-    context = zmq.Context()
-    publisher = context.socket(zmq.PUB)
-    publisher.connect("tcp://localhost:5555")
+        #se increve no topico texto
+        #OBS: Não sei se a logica tá certa, seria melhor por IDs de usuarios eu acho 
+        topico = f"TXT/{self.room}"
+        subscriber.setsockopt_string(zmq.SUBSCRIBE, topico)
 
-    while True:
-        msg = input(f"[{identity}] ...")
-        msgPraEnviar = f"TXT/{room}|{identity}|{msg}"
-        publisher.send_string(msgPraEnviar)
+        #print(f"[CLIENTE] incrito na sala {room}") #tem que virar confirmação no gui
 
+        while True:
+            #recebe msg completa
+            message = subscriber.recv_string()
+            _, user, msg = message.split("|", 2)
+            if user != self.identity:
+                #print(f"\n[{user}]: {msg}")
+                self.msgCallBack(user,msg) #para a gui
 
-UserID = input("[Registro] Nickname:")
-roomID = input("[Registro] Sala:")
+    def enviarMsg(self):
+        msgPraEnviar = f"TXT/{self.room}|{self.identity}|{self.msg}"
+        self.pub.send_string(msgPraEnviar)
 
-thread_recv = threading.Thread(target=escutarMsg, args=(UserID, roomID), daemon=True)
-thread_recv.start()
-    
-enviarMsg(UserID, roomID)
