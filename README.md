@@ -11,6 +11,7 @@ Trabalho feito para Sistemas distribuídos 2026.
 - [ ] Função para reconectar com o broker
 - [ ] ID unico para os brokers
 - [ ] Comunicação entre brokers
+- [x] Heartbeat
 
 ## Arquitetura:
 1 Broker ... N clients.
