@@ -5,7 +5,6 @@ from ttkbootstrap.constants import *
 import threading
 import cv2
 from PIL import Image, ImageTk
-# Importamos tu lógica
 from client import Cliente 
 
 class VideoCallApp:
@@ -47,18 +46,19 @@ class VideoCallApp:
         room = self.ent_room.get().strip()
         
         if nickname and room:
-            self.client = Cliente(nickname, room, lambda u, m: self.root.after(0, self.add_chat_message, u, m))
+            self.client = Cliente(nickname, room, lambda u, m: self.root.after(0, self.add_chat_message, u, m),
+                                  lambda vivo: self.root.after(0, self.on_broker_status, vivo))
             
             #troca interf
             self.login_frame.pack_forget()
             self.setup_videocall_ui(nickname, room)
 
             # escuta
-            threading.Thread(target=self.client.escutarMsg, daemon=True).start()
+            self.client.threadEscuta()
+
             self.start_webcam()
             
-            self.client.msg = "Entrou na ligação"
-            self.client.enviarMsg()
+            self.client.enviarMsg("Entrou na ligação")
             self.add_chat_message(nickname, "Bem-vindo")
 
 
@@ -91,6 +91,7 @@ class VideoCallApp:
         self.chat_text.pack(expand=True, fill=BOTH, padx=10, pady=5)
 
         self.chat_text.tag_config("sistema", foreground="#00FF00", font=("Helvetica", 10, "bold"))
+        self.chat_text.tag_config("sair", foreground="#FF3300", font=("Helvetica", 10, "bold"))
 
         # --- INPUT---
         input_container = tb.Frame(chat_side)
@@ -105,9 +106,7 @@ class VideoCallApp:
     def send_chat(self):
         msg = self.msg_entry.get().strip()
         if msg and self.client:
-            self.client.msg = msg
-            self.client.enviarMsg()
-            
+            self.client.enviarMsg(msg)
             self.add_chat_message("Eu", msg)
             self.msg_entry.delete(0, END)
 
@@ -116,6 +115,8 @@ class VideoCallApp:
 
         if "Entrou na ligação" in msg:
             tag = "sistema"
+        elif "saiu da ligação" in msg:
+            tag = "sair"
 
         self.chat_text.insert(END, f"[{user}]: {msg}\n", tag)
         self.chat_text.see(END)
@@ -143,10 +144,37 @@ class VideoCallApp:
 
     def quit_app(self):
         self.video_running = False
-        if self.cap: self.cap.release()
-        self.root.destroy()
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+        if self.client:
+            self.client.desconectar()
+            self.client = None
+
+        self.main_container.destroy()
+        self.login_frame = tb.Frame(self.root)
+        self.setup_login_ui()
+
+    def on_broker_status(self, vivo):
+        if not vivo:
+            self.reconect_popup = tk.Toplevel(self.root)
+            self.reconect_popup.title("")
+            self.reconect_popup.geometry("250x100")
+            self.reconect_popup.resizable(False, False)
+            self.reconect_popup.grab_set()
+            tb.Label(
+                self.reconect_popup,
+                text="Reconectando...",
+                font=("Helvetica", 14, "bold"),
+                bootstyle=WARNING
+            ).pack(expand=True)
+        else:
+            if hasattr(self, "reconect_popup") and self.reconect_popup.winfo_exists():
+                self.reconect_popup.destroy()
 
 if __name__ == "__main__":
     root = tb.Window(themename="darkly")
     app = VideoCallApp(root)
     root.mainloop()
+
+#end

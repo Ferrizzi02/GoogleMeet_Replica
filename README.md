@@ -8,6 +8,8 @@ Trabalho feito para Sistemas distribuídos 2026.
 - [x] Texto
 - [ ] Audio
 - [ ] Video
+- [ ] Função para reconectar com o broker
+- [ ] ID unico para os brokers
 - [ ] Comunicação entre brokers
 
 ## Arquitetura:
@@ -16,8 +18,9 @@ XPUB/XSUB
 
 ### Canais
 Mensagens: `localhost:5555/TXT`
-Audio: `localhost:5555/AUD`
-Video: `localhost:5555/VID`
+Audio: `localhost:5557/AUD`
+Video: `localhost:5558/VID`
+Heartbeat `localhost:5559/VID`
 
 ## Instalação
 Instação de pacotes
