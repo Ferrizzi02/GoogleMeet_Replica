@@ -14,7 +14,7 @@ class Cliente:
         self.pub.connect("tcp://localhost:5555")        
 
     def threadEscuta(self):
-        thread_recv = threading.Thread(target=self.escutarMsg, args=(UserID, roomID), daemon=True)
+        thread_recv = threading.Thread(target=self.escutarMsg, daemon=True)
         thread_recv.start()
 
     def escutarMsg(self):
