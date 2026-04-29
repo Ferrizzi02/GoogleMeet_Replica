@@ -39,6 +39,7 @@ class Cliente:
 
         self.ultimoHeartbeat = time.time()
         self.brokerVivo = False
+        self.broker_version = 0
 
         # Socket de publicação — será (re)criado em _conectar_broker
         self.pub = None
@@ -47,6 +48,11 @@ class Cliente:
         self._pub_lock = threading.Lock()
         self._aud_lock = threading.Lock()
         self._vid_lock = threading.Lock()
+        self._pending_text = []
+        self._pending_lock = threading.Lock()
+        self._pending_max = 100
+        self._presence_interval = 3
+        self._presence_thread = None
 
         # Conecta em background — não bloqueia a GUI
         threading.Thread(target=self._descobrir_e_conectar, daemon=True).start()
@@ -87,19 +93,28 @@ class Cliente:
             if self.pub:
                 self.pub.close()
             self.pub = self.context.socket(zmq.PUB)
+            self.pub.setsockopt(zmq.SNDHWM, 1000)
+            self.pub.setsockopt(zmq.LINGER, 0)
             self.pub.connect(f"tcp://{ip}:{pub_port}")
 
         with self._aud_lock:
             if self.aud_pub:
                 self.aud_pub.close()
             self.aud_pub = self.context.socket(zmq.PUB)
+            self.aud_pub.setsockopt(zmq.SNDHWM, 50)
+            self.aud_pub.setsockopt(zmq.LINGER, 0)
             self.aud_pub.connect(f"tcp://{ip}:{aud_pub_port}")
 
         with self._vid_lock:
             if self.vid_pub:
                 self.vid_pub.close()
             self.vid_pub = self.context.socket(zmq.PUB)
+            self.vid_pub.setsockopt(zmq.SNDHWM, 20)
+            self.vid_pub.setsockopt(zmq.LINGER, 0)
             self.vid_pub.connect(f"tcp://{ip}:{vid_pub_port}")
+
+        # Aguarda handshake de sockets PUB/SUB antes de marcar o broker como ativo.
+        time.sleep(0.1)
 
         self.broker_ip       = ip
         self.broker_port     = pub_port
@@ -111,7 +126,34 @@ class Cliente:
         self.broker_hb_port  = hb_port
         self.ultimoHeartbeat = time.time()
         self.brokerVivo      = True
+        self.broker_version += 1
         print(f"[Cliente] Conectado ao broker {ip}:{pub_port}")
+
+        self._flush_pending_text()
+        self.enviarMsg("__PRESENCE__")
+
+    def _flush_pending_text(self):
+        with self._pending_lock:
+            if not self._pending_text:
+                return
+            pending = list(self._pending_text)
+            self._pending_text.clear()
+
+        for text in pending:
+            self._send_text_now(text)
+
+    def _send_text_now(self, msg: str) -> bool:
+        if not self.pub:
+            return False
+
+        payload = f"TXT/{self.room}|{self.identity}|{msg}"
+        try:
+            self.pub.send_string(payload, zmq.DONTWAIT)
+            return True
+        except zmq.ZMQError as e:
+            if self.running:
+                print(f"[Cliente] Erro ao enviar mensagem: {e}")
+            return False
 
     def _descobrir_e_conectar(self):
         for attempt in range(10):
@@ -141,97 +183,151 @@ class Cliente:
         threading.Thread(target=self._escutar_vid,       daemon=True).start()
         threading.Thread(target=self._escutar_heartbeat, daemon=True).start()
         threading.Thread(target=self._monitor_broker,    daemon=True).start()
+        if not self._presence_thread:
+            self._presence_thread = threading.Thread(target=self._presence_loop, daemon=True)
+            self._presence_thread.start()
 
     def _escutar_txt(self):
-        # Aguarda até ter um broker disponível
-        while self.running and self.broker_ip is None:
-            time.sleep(0.2)
-        if not self.running:
-            return
-
-        subscriber = self.context.socket(zmq.SUB)
-        subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_sub_port}")
-        subscriber.setsockopt_string(zmq.SUBSCRIBE, f"TXT/{self.room}")
+        subscriber = None
+        current_version = -1
 
         while self.running:
+            if self.broker_ip is None:
+                time.sleep(0.2)
+                continue
+
+            if subscriber is None or current_version != self.broker_version:
+                if subscriber:
+                    subscriber.close()
+                subscriber = self.context.socket(zmq.SUB)
+                subscriber.setsockopt(zmq.LINGER, 0)
+                subscriber.setsockopt_string(zmq.SUBSCRIBE, f"TXT/{self.room}")
+                subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_sub_port}")
+                current_version = self.broker_version
+
             try:
                 if subscriber.poll(timeout=500):
-                    message = subscriber.recv_string(zmq.NOBLOCK)
-                    partes = message.split("|", 2)
-                    if len(partes) == 3:
-                        _, user, msg = partes
-                        if user != self.identity:
-                            self.msgCallBack(user, msg)
+                    while True:
+                        try:
+                            message = subscriber.recv_string(zmq.DONTWAIT)
+                        except zmq.Again:
+                            break
+                        partes = message.split("|", 2)
+                        if len(partes) == 3:
+                            _, user, msg = partes
+                            if user != self.identity:
+                                self.msgCallBack(user, msg)
             except zmq.ZMQError as e:
                 if self.running:
                     print(f"[Cliente] Erro TXT: {e}")
 
-        subscriber.close()
+        if subscriber:
+            subscriber.close()
 
     def _escutar_aud(self):
-        # Aguarda até ter um broker disponível
-        while self.running and self.broker_ip is None:
-            time.sleep(0.2)
-        if not self.running:
-            return
-
-        subscriber = self.context.socket(zmq.SUB)
-        subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_aud_sub_port}")
-        subscriber.setsockopt_string(zmq.SUBSCRIBE, f"AUD/{self.room}")
+        subscriber = None
+        current_version = -1
 
         while self.running:
+            if self.broker_ip is None:
+                time.sleep(0.2)
+                continue
+
+            if subscriber is None or current_version != self.broker_version:
+                if subscriber:
+                    subscriber.close()
+                subscriber = self.context.socket(zmq.SUB)
+                subscriber.setsockopt(zmq.LINGER, 0)
+                subscriber.setsockopt_string(zmq.SUBSCRIBE, f"AUD/{self.room}")
+                subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_aud_sub_port}")
+                current_version = self.broker_version
+
             try:
                 if subscriber.poll(timeout=500):
-                    message = subscriber.recv()
-                    partes = message.split(b"|", 2)
-                    if len(partes) == 3:
-                        _, user, data = partes
-                        if user.decode() != self.identity and self.audCallBack:
-                            self.audCallBack(user.decode(), data)
+                    latest = {}
+                    while True:
+                        try:
+                            message = subscriber.recv(zmq.DONTWAIT)
+                        except zmq.Again:
+                            break
+                        partes = message.split(b"|", 2)
+                        if len(partes) == 3:
+                            _, user, data = partes
+                            decoded_user = user.decode()
+                            if decoded_user != self.identity:
+                                latest[decoded_user] = data
+
+                    for user, data in latest.items():
+                        if self.audCallBack:
+                            self.audCallBack(user, data)
             except zmq.ZMQError as e:
                 if self.running:
                     print(f"[Cliente] Erro AUD: {e}")
 
-        subscriber.close()
+        if subscriber:
+            subscriber.close()
 
     def _escutar_vid(self):
-        # Aguarda até ter um broker disponível
-        while self.running and self.broker_ip is None:
-            time.sleep(0.2)
-        if not self.running:
-            return
-
-        subscriber = self.context.socket(zmq.SUB)
-        subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_vid_sub_port}")
-        subscriber.setsockopt_string(zmq.SUBSCRIBE, f"VID/{self.room}")
+        subscriber = None
+        current_version = -1
 
         while self.running:
+            if self.broker_ip is None:
+                time.sleep(0.2)
+                continue
+
+            if subscriber is None or current_version != self.broker_version:
+                if subscriber:
+                    subscriber.close()
+                subscriber = self.context.socket(zmq.SUB)
+                subscriber.setsockopt(zmq.LINGER, 0)
+                subscriber.setsockopt_string(zmq.SUBSCRIBE, f"VID/{self.room}")
+                subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_vid_sub_port}")
+                current_version = self.broker_version
+
             try:
                 if subscriber.poll(timeout=500):
-                    message = subscriber.recv()
-                    partes = message.split(b"|", 2)
-                    if len(partes) == 3:
-                        _, user, data = partes
-                        if user.decode() != self.identity and self.vidCallBack:
-                            self.vidCallBack(user.decode(), data)
+                    last_frame = {}
+                    while True:
+                        try:
+                            message = subscriber.recv(zmq.DONTWAIT)
+                        except zmq.Again:
+                            break
+                        partes = message.split(b"|", 2)
+                        if len(partes) == 3:
+                            _, user, data = partes
+                            decoded_user = user.decode()
+                            if decoded_user != self.identity:
+                                last_frame[decoded_user] = data
+
+                    for user, data in last_frame.items():
+                        if self.vidCallBack:
+                            self.vidCallBack(user, data)
             except zmq.ZMQError as e:
                 if self.running:
                     print(f"[Cliente] Erro VID: {e}")
 
-        subscriber.close()
+        if subscriber:
+            subscriber.close()
 
     def _escutar_heartbeat(self):
-        # Aguarda até ter um broker disponível
-        while self.running and self.broker_ip is None:
-            time.sleep(0.2)
-        if not self.running:
-            return
-
-        subscriber = self.context.socket(zmq.SUB)
-        subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_hb_port}")
-        subscriber.setsockopt_string(zmq.SUBSCRIBE, "HB/")
+        subscriber = None
+        current_version = -1
 
         while self.running:
+            if self.broker_ip is None:
+                time.sleep(0.2)
+                continue
+
+            if subscriber is None or current_version != self.broker_version:
+                if subscriber:
+                    subscriber.close()
+                subscriber = self.context.socket(zmq.SUB)
+                subscriber.setsockopt(zmq.LINGER, 0)
+                subscriber.setsockopt_string(zmq.SUBSCRIBE, "HB/")
+                subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_hb_port}")
+                current_version = self.broker_version
+
             try:
                 if subscriber.poll(timeout=500):
                     subscriber.recv_string(zmq.NOBLOCK)
@@ -240,7 +336,8 @@ class Cliente:
                 if self.running:
                     print(f"[Cliente] Erro HB: {e}")
 
-        subscriber.close()
+        if subscriber:
+            subscriber.close()
 
     # ------------------------------------------------------------------
     # Monitor de broker — detecta falha e faz failover
@@ -300,13 +397,21 @@ class Cliente:
     def enviarMsg(self, msg: str):
         if not msg:
             return
-        payload = f"TXT/{self.room}|{self.identity}|{msg}"
-        with self._pub_lock:
-            if self.pub:
-                try:
-                    self.pub.send_string(payload)
-                except zmq.ZMQError as e:
-                    print(f"[Cliente] Erro ao enviar mensagem: {e}")
+
+        if self._send_text_now(msg):
+            return
+
+        with self._pending_lock:
+            if len(self._pending_text) >= self._pending_max:
+                self._pending_text.pop(0)
+            self._pending_text.append(msg)
+            print(f"[Cliente] Mensagem armazenada para reenvio ({len(self._pending_text)} pendentes)")
+
+    def _presence_loop(self):
+        while self.running:
+            if self.brokerVivo and self.broker_ip is not None:
+                self.enviarMsg("__PRESENCE__")
+            time.sleep(self._presence_interval)
 
     def enviarAudio(self, data: bytes):
         if not data:
@@ -337,6 +442,7 @@ class Cliente:
         self.running = False
         self.enviarMsg("saiu da ligação")
         time.sleep(0.5)
+
         with self._pub_lock:
             if self.pub:
                 self.pub.close()
@@ -349,6 +455,12 @@ class Cliente:
             if self.vid_pub:
                 self.vid_pub.close()
                 self.vid_pub = None
-        self.context.term()
+
+        # Aguarda as threads de recebimento saírem do loop antes de encerrar o contexto.
+        time.sleep(0.2)
+        try:
+            self.context.term()
+        except Exception:
+            pass
 
 # end

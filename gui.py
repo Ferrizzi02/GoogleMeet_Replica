@@ -1,5 +1,5 @@
 ﻿import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import messagebox, scrolledtext
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 import threading
@@ -26,6 +26,8 @@ class VideoCallApp:
         self.camera = Camera()
         self.username = ""
         self.after_id = None
+        self.participants = {}
+        self.session_active = False
 
         # tela inicial
         self.login_frame = tb.Frame(self.root)
@@ -54,7 +56,12 @@ class VideoCallApp:
         room = self.ent_room.get().strip()
 
         if nickname and room:
+            if nickname.lower() == "eu":
+                messagebox.showerror("Nome inválido", "Escolha outro nome de usuário. 'Eu' não é aceito.")
+                return
             self.username = nickname
+            self.participants = {nickname: nickname}
+            self.session_active = True
             self.client = Cliente(
                 nickname,
                 room,
@@ -71,6 +78,7 @@ class VideoCallApp:
             self.start_media()
 
             self.client.enviarMsg("Entrou na ligação")
+            self.update_participants_display()
             self.add_chat_message(nickname, "Bem-vindo")
 
     def setup_videocall_ui(self, nick, room):
@@ -138,6 +146,10 @@ class VideoCallApp:
         self.chat_text.tag_config("sistema", foreground="#00FF00", font=("Helvetica", 10, "bold"))
         self.chat_text.tag_config("sair", foreground="#FF3300", font=("Helvetica", 10, "bold"))
 
+        tb.Label(chat_side, text="Participantes", font=("Helvetica", 10, "bold"), bootstyle=INFO).pack(padx=10, pady=(10, 0), anchor="w")
+        self.participants_list = tk.Listbox(chat_side, bg="#1a1a1a", fg="white", font=("Helvetica", 10), height=6, borderwidth=0, highlightthickness=0)
+        self.participants_list.pack(fill=X, padx=10, pady=(0, 10))
+
         input_container = tb.Frame(chat_side)
         input_container.pack(fill=X, padx=10, pady=10)
 
@@ -152,19 +164,33 @@ class VideoCallApp:
         if msg and self.client:
             self.client.enviarMsg(msg)
             self.add_chat_message("Eu", msg)
-            self.msg_entry.delete(0, END)
+            self.msg_entry.delete(0, tk.END)
 
     def add_chat_message(self, user, msg, tag=None):
-        self.chat_text.config(state=NORMAL)
+        if msg == "__PRESENCE__":
+            if user != self.username and user not in self.participants:
+                self.participants[user] = self._resolve_duplicate_name(user)
+                self.update_participants_display()
+            return
 
+        display_name = self.participants.get(user, user)
         if "Entrou na ligação" in msg:
             tag = "sistema"
+            if user != "Eu" and user not in self.participants:
+                self.participants[user] = self._resolve_duplicate_name(user)
+                display_name = self.participants[user]
         elif "saiu da ligação" in msg:
             tag = "sair"
+            if user in self.participants:
+                display_name = self.participants[user]
+                del self.participants[user]
+            self._release_remote_display(user)
 
-        self.chat_text.insert(END, f"[{user}]: {msg}\n", tag)
-        self.chat_text.see(END)
-        self.chat_text.config(state=DISABLED)
+        self.chat_text.config(state=tk.NORMAL)
+        self.chat_text.insert(tk.END, f"[{display_name}]: {msg}\n", tag)
+        self.chat_text.see(tk.END)
+        self.chat_text.config(state=tk.DISABLED)
+        self.update_participants_display()
 
     def start_media(self):
         self.video_running = True
@@ -204,22 +230,34 @@ class VideoCallApp:
     def quit_app(self):
         self.video_running = False
         self.audio_running = False
+        self.session_active = False
         if self.after_id:
             self.root.after_cancel(self.after_id)
             self.after_id = None
         if self.client:
-            self.client.desconectar()
+            client = self.client
             self.client = None
+            threading.Thread(target=client.desconectar, daemon=True).start()
         self.camera.release()
         self.main_container.destroy()
+        self.remote_displays = {}
+        self.available_displays = []
+        self.participants = {}
         self.login_frame = tb.Frame(self.root)
         self.setup_login_ui()
 
     def receive_audio(self, user, data):
-        if self.audio:
-            self.audio.write(data)
+        if not self.session_active:
+            return
+        try:
+            if self.audio:
+                self.audio.write(data)
+        except Exception:
+            pass
 
     def receive_video(self, user, data):
+        if not self.session_active:
+            return
         try:
             arr = np.frombuffer(data, dtype=np.uint8)
             frame = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -228,19 +266,50 @@ class VideoCallApp:
                 img = Image.fromarray(frame)
                 img = img.resize((200, 150))
                 imgtk = ImageTk.PhotoImage(image=img)
-                
+
                 if user not in self.remote_displays:
                     if self.available_displays:
                         display = self.available_displays.pop(0)
                         self.remote_displays[user] = display
                     else:
-                        return  # No available displays
-                
+                        return
+
                 display = self.remote_displays[user]
+                if not display.winfo_exists():
+                    return
                 display.imgtk = imgtk
                 display.configure(image=imgtk, text=user)
+        except tk.TclError:
+            pass
         except Exception as e:
             print(f"[GUI] Erro ao decodificar vídeo remoto: {e}")
+
+    def update_participants_display(self):
+        if hasattr(self, "participants_list"):
+            self.participants_list.delete(0, tk.END)
+            for participant in sorted(self.participants.values()):
+                self.participants_list.insert(tk.END, participant)
+
+    def _release_remote_display(self, user):
+        display = self.remote_displays.pop(user, None)
+        if display:
+            try:
+                display.configure(image="", text="Aguardando...")
+            except tk.TclError:
+                pass
+            if display not in self.available_displays:
+                self.available_displays.append(display)
+
+    def _resolve_duplicate_name(self, user):
+        current_names = set(self.participants.values())
+        if user not in current_names:
+            return user
+        suffix = 2
+        candidate = f"{user} ({suffix})"
+        while candidate in current_names:
+            suffix += 1
+            candidate = f"{user} ({suffix})"
+        return candidate
 
     def on_broker_status(self, vivo):
         if not vivo:
