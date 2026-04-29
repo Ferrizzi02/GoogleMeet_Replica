@@ -10,74 +10,20 @@ Desenvolver uma ferramenta de videoconferência (Vídeo, Áudio e Texto) que per
 
 Baseado nos requisitos do professor:
 
-- [ ] **Múltiplos Brokers**: Implementar cluster com comunicação entre brokers (ROUTER/DEALER).
-- [ ] **QoS por Mídia**: Buffer, retry para texto; drop para vídeo; baixa latência para áudio.
-- [ ] **Service Discovery Avançado**: Round-robin, broadcast, seleção por latência.
-- [ ] **Fault Tolerance Completa**: Manutenção de sessão, impacto mínimo na reconexão.
-- [ ] **Vídeo Múltiplo**: Suporte a vídeo de múltiplos usuários na GUI (grade ou seletor).
-- [ ] **Testes e Demonstração**: Simular cenários de falha e recuperação.
-- [ ] **Documentação Técnica**: Detalhar arquitetura, padrões e estratégias.
-
-
-## Requisitos Implementados
-
-### ✅ Linguagem e Bibliotecas
-- **Python 3**: Linguagem principal do projeto.
-- **ZeroMQ**: Comunicação assíncrona via modelo PUB/SUB.
-- **Broker Central**: Entidade centralizada para distribuição de mensagens em canais separados (Texto, Áudio, Vídeo).
-
-### ✅ Funcionalidades Básicas
-- **Texto**: Chat em tempo real entre participantes.
-- **Áudio**: Captura e transmissão de áudio via pyaudio.
-- **Vídeo**: Captura de webcam e transmissão de frames via OpenCV.
-- **Interface Desktop**: GUI completa com ttkbootstrap, tkinter e PIL.
-
-### ✅ Arquitetura Atual
-- **1 Broker Central** com múltiplos clientes.
-- **Canais Separados**:
-  - Mensagens (TXT): `localhost:5555/5556`
-  - Áudio (AUD): `localhost:5557/5558`
-  - Vídeo (VID): `localhost:5559/5560`
-  - Heartbeat (HB): `localhost:5561`
-- **Modelo XPUB/XSUB** para roteamento eficiente.
-
-### ✅ Concorrência e Processamento Assíncrono
-- **Threads obrigatórias** para:
-  - Captura de mídia (áudio/vídeo)
-  - Envio de dados
-  - Recepção e renderização
-- **Processamento paralelo** para evitar bloqueios na GUI.
-
-### ✅ Identidade e Sessão
-- **Login simples**: Nickname único por usuário.
-- **Salas (Grupos)**: Entrada em salas por nome (ex: "SALA").
-- **Controle básico**: Entrada/saída com notificações.
-
-### 🔄 Arquitetura Distribuída com Múltiplos Brokers
-- **Status**: Parcialmente implementado (1 broker, mas preparado para expansão).
-- **Implementado**: Registry para descoberta de brokers.
-- **Pendente**: Cluster de N brokers cooperando, roteamento entre brokers via ROUTER/DEALER.
-
-### 🔄 Descoberta de Serviços (Service Discovery)
-- **Status**: Básico implementado.
-- **Implementado**: Registry simples com registro dinâmico de brokers.
-- **Pendente**: Seleção inteligente (round-robin, menor latência), broadcast via ZeroMQ.
-
-### 🔄 Tolerância a Falhas (Fault Tolerance)
-- **Status**: Parcialmente implementado.
-- **Implementado**: Heartbeat via PUB/SUB, detecção de falha, reconexão automática.
-- **Pendente**: Manutenção de sessão com mínimo impacto, timeout + failover robusto.
-
-### ❌ Controle de Qualidade (QoS)
-- **Status**: Não implementado.
-- **Pendente**:
-  - **Texto**: Garantia de entrega (retry).
-  - **Áudio**: Baixa latência (pode perder pacotes).
-  - **Vídeo**: Taxa adaptativa, buffer simples, drop de frames.
-
-### ✅ Demonstração
-- **Simulação atual**: Múltiplos clientes conectados ao broker central.
-- **Pendente**: Simulação de falha de broker, reconexão automática, comunicação entre brokers.
+- [x] **Linguagem e Bibliotecas**: Uso de Python 3 e ZeroMQ para comunicação assíncrona (PUB/SUB).
+- [x] **Broker Central**: Entidade centralizada com canais separados unidirecionais para Áudio, Vídeo e Texto.
+- [x] **Funcionalidades Básicas**: Suporte a Vídeo, Áudio e Texto em ligações individuais e em grupo.
+- [x] **Concorrência Assíncrona**: Uso de threads para captura de mídia, envio, recepção e renderização.
+- [x] **Identidade e Sessão**: Login simples com ID único, controle de presença e entrada/saída de salas (grupos).
+- [x] **Service Discovery Básico**: Registro dinâmico de brokers via registry simples.
+- [x] **Fault Tolerance Parcial**: Heartbeat para detecção de falha e reconexão automática.
+- [x] **Vídeo Múltiplo**: Suporte a vídeo de múltiplos usuários na GUI (grade 3x3).
+- [ ] **Múltiplos Brokers**: Implementar cluster de N brokers cooperando com comunicação via ROUTER/DEALER.
+- [ ] **Service Discovery Avançado**: Seleção inteligente de broker (round-robin, menor latência, broadcast).
+- [ ] **Fault Tolerance Completa**: Manutenção de sessão com mínimo impacto na reconexão.
+- [ ] **QoS por Mídia**: Buffer/retry para texto; baixa latência/drop para áudio/vídeo; taxa adaptativa.
+- [ ] **Testes e Demonstração**: Simular cenários de falha, reconexão e comunicação entre brokers.
+- [ ] **Documentação Técnica**: Detalhar arquitetura distribuída, padrões ZeroMQ e estratégias.
 
 ## Instalação e Execução
 
