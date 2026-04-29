@@ -25,9 +25,6 @@ class Registry:
 
         self.running = True
 
-    # ------------------------------------------------------------------
-    # Heartbeat listener — conecta dinamicamente nos brokers registrados
-    # ------------------------------------------------------------------
     def _heartbeat_listener(self):
         """Escuta heartbeats de todos os brokers e atualiza last_seen."""
         sub = self.context.socket(zmq.SUB)
