@@ -28,6 +28,9 @@ Instação de pacotes
 pip install -r requirements.txt
 ```
 
+Ordem de execução: registry.py -> broker.py -> gui.py
+
+
 Rodar broker.py
 ```bash
 python broker.py
