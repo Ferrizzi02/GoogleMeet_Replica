@@ -3,9 +3,12 @@ from tkinter import scrolledtext
 import ttkbootstrap as tb
 from ttkbootstrap.constants import *
 import threading
+import time
 import cv2
 from PIL import Image, ImageTk
-from client import Cliente 
+from client import Cliente
+from audio import Audio
+from camera import Camera 
 
 class VideoCallApp:
     def __init__(self, root):
@@ -17,7 +20,10 @@ class VideoCallApp:
         
         self.client = None
         self.video_running = False
+        self.audio_running = False
         self.cap = None
+        self.audio = Audio()
+        self.camera = Camera()
         
         #tela inicial
         self.login_frame = tb.Frame(self.root)
@@ -47,6 +53,8 @@ class VideoCallApp:
         
         if nickname and room:
             self.client = Cliente(nickname, room, lambda u, m: self.root.after(0, self.add_chat_message, u, m),
+                                  lambda u, d: self.root.after(0, self.receive_audio, u, d),
+                                  lambda u, d: self.root.after(0, self.receive_video, u, d),
                                   lambda vivo: self.root.after(0, self.on_broker_status, vivo))
             
             #troca interf
@@ -56,7 +64,7 @@ class VideoCallApp:
             # escuta
             self.client.threadEscuta()
 
-            self.start_webcam()
+            self.start_media()
             
             self.client.enviarMsg("Entrou na ligação")
             self.add_chat_message(nickname, "Bem-vindo")
@@ -122,15 +130,22 @@ class VideoCallApp:
         self.chat_text.see(END)
         self.chat_text.config(state=DISABLED)
 
-    def start_webcam(self):
+    def start_media(self):
         self.video_running = True
+        self.audio_running = True
         self.cap = cv2.VideoCapture(0)
         self.update_frame()
+        threading.Thread(target=self.send_audio_loop, daemon=True).start()
 
     def update_frame(self):
         if self.video_running:
             ret, frame = self.cap.read()
             if ret:
+                # Enviar frame
+                if self.client:
+                    frame_data = cv2.imencode('.jpg', frame)[1].tobytes()
+                    self.client.enviarVideo(frame_data)
+
                 # modificar para a logica /vid/{sala}
                 frame = cv2.flip(frame, 1)
                 frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -140,10 +155,18 @@ class VideoCallApp:
                 self.video_display.imgtk = imgtk
                 self.video_display.configure(image=imgtk)
             
-            self.root.after(30, self.update_frame)
+            self.root.after(100, self.update_frame)  # Aumentar intervalo para reduzir carga
+
+    def send_audio_loop(self):
+        while self.audio_running and self.client:
+            data = self.audio.read(1024)
+            self.client.enviarAudio(data)
+            # Pequena pausa para não sobrecarregar
+            time.sleep(0.01)
 
     def quit_app(self):
         self.video_running = False
+        self.audio_running = False
         if self.cap:
             self.cap.release()
             self.cap = None
@@ -155,7 +178,29 @@ class VideoCallApp:
         self.login_frame = tb.Frame(self.root)
         self.setup_login_ui()
 
+    def receive_audio(self, user, data):
+        if self.audio:
+            self.audio.write(data)
+
+    def receive_video(self, user, data):
+        pass
+
     def on_broker_status(self, vivo):
+        if not vivo:
+            self.reconect_popup = tk.Toplevel(self.root)
+            self.reconect_popup.title("")
+            self.reconect_popup.geometry("250x100")
+            self.reconect_popup.resizable(False, False)
+            self.reconect_popup.grab_set()
+            tb.Label(
+                self.reconect_popup,
+                text="Reconectando...",
+                font=("Helvetica", 14, "bold"),
+                bootstyle=WARNING
+            ).pack(expand=True)
+        else:
+            if hasattr(self, "reconect_popup") and self.reconect_popup.winfo_exists():
+                self.reconect_popup.destroy()
         if not vivo:
             self.reconect_popup = tk.Toplevel(self.root)
             self.reconect_popup.title("")

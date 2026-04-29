@@ -9,6 +9,8 @@ BROKER_TIMEOUT = 5   # segundos sem heartbeat → broker considerado morto
 class Cliente:
     def __init__(self, identity: str, room: str,
                  msgCallBack,
+                 audCallBack=None,
+                 vidCallBack=None,
                  brokerStatusCallBack=None,
                  registry_host: str = REGISTRY_HOST,
                  registry_port: int = REGISTRY_PORT):
@@ -16,6 +18,8 @@ class Cliente:
         self.identity = identity
         self.room = room
         self.msgCallBack = msgCallBack
+        self.audCallBack = audCallBack
+        self.vidCallBack = vidCallBack
         self.brokerStatusCallBack = brokerStatusCallBack
         self.registry_host = registry_host
         self.registry_port = registry_port
@@ -25,8 +29,12 @@ class Cliente:
 
         # Estado do broker atual
         self.broker_ip   = None
-        self.broker_port = None   # porta de publicação (XSUB do broker)
-        self.broker_sub_port = None  # porta de assinatura (XPUB do broker)
+        self.broker_port = None   # porta de publicação TXT (XSUB do broker)
+        self.broker_sub_port = None  # porta de assinatura TXT (XPUB do broker)
+        self.broker_aud_pub_port = None  # porta de publicação AUD
+        self.broker_aud_sub_port = None  # porta de assinatura AUD
+        self.broker_vid_pub_port = None  # porta de publicação VID
+        self.broker_vid_sub_port = None  # porta de assinatura VID
         self.broker_hb_port  = None
 
         self.ultimoHeartbeat = time.time()
@@ -34,7 +42,11 @@ class Cliente:
 
         # Socket de publicação — será (re)criado em _conectar_broker
         self.pub = None
+        self.aud_pub = None
+        self.vid_pub = None
         self._pub_lock = threading.Lock()
+        self._aud_lock = threading.Lock()
+        self._vid_lock = threading.Lock()
 
         # Conecta em background — não bloqueia a GUI
         threading.Thread(target=self._descobrir_e_conectar, daemon=True).start()
@@ -69,7 +81,7 @@ class Cliente:
     # ------------------------------------------------------------------
     # Conexão / reconexão a um broker
     # ------------------------------------------------------------------
-    def _conectar_broker(self, ip: str, pub_port: int, sub_port: int, hb_port: int):
+    def _conectar_broker(self, ip: str, pub_port: int, sub_port: int, aud_pub_port: int, aud_sub_port: int, vid_pub_port: int, vid_sub_port: int, hb_port: int):
         """(Re)cria o socket PUB apontando para o novo broker."""
         with self._pub_lock:
             if self.pub:
@@ -77,9 +89,25 @@ class Cliente:
             self.pub = self.context.socket(zmq.PUB)
             self.pub.connect(f"tcp://{ip}:{pub_port}")
 
+        with self._aud_lock:
+            if self.aud_pub:
+                self.aud_pub.close()
+            self.aud_pub = self.context.socket(zmq.PUB)
+            self.aud_pub.connect(f"tcp://{ip}:{aud_pub_port}")
+
+        with self._vid_lock:
+            if self.vid_pub:
+                self.vid_pub.close()
+            self.vid_pub = self.context.socket(zmq.PUB)
+            self.vid_pub.connect(f"tcp://{ip}:{vid_pub_port}")
+
         self.broker_ip       = ip
         self.broker_port     = pub_port
         self.broker_sub_port = sub_port
+        self.broker_aud_pub_port = aud_pub_port
+        self.broker_aud_sub_port = aud_sub_port
+        self.broker_vid_pub_port = vid_pub_port
+        self.broker_vid_sub_port = vid_sub_port
         self.broker_hb_port  = hb_port
         self.ultimoHeartbeat = time.time()
         self.brokerVivo      = True
@@ -93,7 +121,11 @@ class Cliente:
                     ip=broker["ip"],
                     pub_port=int(broker["port"]),
                     sub_port=int(broker.get("sub_port", int(broker["port"]) + 1)),
-                    hb_port=int(broker.get("hb_port", 5559)),
+                    aud_pub_port=int(broker.get("aud_pub_port", 5557)),
+                    aud_sub_port=int(broker.get("aud_sub_port", 5558)),
+                    vid_pub_port=int(broker.get("vid_pub_port", 5559)),
+                    vid_sub_port=int(broker.get("vid_sub_port", 5560)),
+                    hb_port=int(broker.get("hb_port", 5561)),
                 )
                 return
             print(f"[Cliente] Nenhum broker disponível (tentativa {attempt+1}). Aguardando...")
@@ -105,6 +137,8 @@ class Cliente:
     # ------------------------------------------------------------------
     def threadEscuta(self):
         threading.Thread(target=self._escutar_txt,       daemon=True).start()
+        threading.Thread(target=self._escutar_aud,       daemon=True).start()
+        threading.Thread(target=self._escutar_vid,       daemon=True).start()
         threading.Thread(target=self._escutar_heartbeat, daemon=True).start()
         threading.Thread(target=self._monitor_broker,    daemon=True).start()
 
@@ -131,6 +165,58 @@ class Cliente:
             except zmq.ZMQError as e:
                 if self.running:
                     print(f"[Cliente] Erro TXT: {e}")
+
+        subscriber.close()
+
+    def _escutar_aud(self):
+        # Aguarda até ter um broker disponível
+        while self.running and self.broker_ip is None:
+            time.sleep(0.2)
+        if not self.running:
+            return
+
+        subscriber = self.context.socket(zmq.SUB)
+        subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_aud_sub_port}")
+        subscriber.setsockopt_string(zmq.SUBSCRIBE, f"AUD/{self.room}")
+
+        while self.running:
+            try:
+                if subscriber.poll(timeout=500):
+                    message = subscriber.recv()
+                    partes = message.split(b"|", 2)
+                    if len(partes) == 3:
+                        _, user, data = partes
+                        if user.decode() != self.identity and self.audCallBack:
+                            self.audCallBack(user.decode(), data)
+            except zmq.ZMQError as e:
+                if self.running:
+                    print(f"[Cliente] Erro AUD: {e}")
+
+        subscriber.close()
+
+    def _escutar_vid(self):
+        # Aguarda até ter um broker disponível
+        while self.running and self.broker_ip is None:
+            time.sleep(0.2)
+        if not self.running:
+            return
+
+        subscriber = self.context.socket(zmq.SUB)
+        subscriber.connect(f"tcp://{self.broker_ip}:{self.broker_vid_sub_port}")
+        subscriber.setsockopt_string(zmq.SUBSCRIBE, f"VID/{self.room}")
+
+        while self.running:
+            try:
+                if subscriber.poll(timeout=500):
+                    message = subscriber.recv()
+                    partes = message.split(b"|", 2)
+                    if len(partes) == 3:
+                        _, user, data = partes
+                        if user.decode() != self.identity and self.vidCallBack:
+                            self.vidCallBack(user.decode(), data)
+            except zmq.ZMQError as e:
+                if self.running:
+                    print(f"[Cliente] Erro VID: {e}")
 
         subscriber.close()
 
@@ -195,7 +281,11 @@ class Cliente:
                         ip=new_ip,
                         pub_port=new_port,
                         sub_port=int(broker.get("sub_port", new_port + 1)),
-                        hb_port=int(broker.get("hb_port", 5559)),
+                        aud_pub_port=int(broker.get("aud_pub_port", 5557)),
+                        aud_sub_port=int(broker.get("aud_sub_port", 5558)),
+                        vid_pub_port=int(broker.get("vid_pub_port", 5559)),
+                        vid_sub_port=int(broker.get("vid_sub_port", 5560)),
+                        hb_port=int(broker.get("hb_port", 5561)),
                     )
                     # Notifica GUI que voltou
                     if self.brokerStatusCallBack:
@@ -218,6 +308,28 @@ class Cliente:
                 except zmq.ZMQError as e:
                     print(f"[Cliente] Erro ao enviar mensagem: {e}")
 
+    def enviarAudio(self, data: bytes):
+        if not data:
+            return
+        payload = f"AUD/{self.room}|{self.identity}|".encode() + data
+        with self._aud_lock:
+            if self.aud_pub:
+                try:
+                    self.aud_pub.send(payload)
+                except zmq.ZMQError as e:
+                    print(f"[Cliente] Erro ao enviar áudio: {e}")
+
+    def enviarVideo(self, data: bytes):
+        if not data:
+            return
+        payload = f"VID/{self.room}|{self.identity}|".encode() + data
+        with self._vid_lock:
+            if self.vid_pub:
+                try:
+                    self.vid_pub.send(payload)
+                except zmq.ZMQError as e:
+                    print(f"[Cliente] Erro ao enviar vídeo: {e}")
+
     # ------------------------------------------------------------------
     # Desconexão
     # ------------------------------------------------------------------
@@ -229,6 +341,14 @@ class Cliente:
             if self.pub:
                 self.pub.close()
                 self.pub = None
+        with self._aud_lock:
+            if self.aud_pub:
+                self.aud_pub.close()
+                self.aud_pub = None
+        with self._vid_lock:
+            if self.vid_pub:
+                self.vid_pub.close()
+                self.vid_pub = None
         self.context.term()
 
 # end
