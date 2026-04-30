@@ -5,6 +5,7 @@ Projeto de Sistemas Distribuídos 2026
 Ferramenta de videoconferência com suporte a texto, áudio e vídeo em Python 3, usando ZeroMQ para comunicação assíncrona.
 
 - Gabriel Lucchetta Garcia Sanchez - 828513
+- Vinícius Yuya Massuda - 834426
 
 ---
 
