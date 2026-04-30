@@ -22,8 +22,8 @@ class VideoCallApp:
         self.client = None
         self.video_running = False
         self.audio_running = False
-        self.audio = Audio()
-        self.camera = Camera()
+        self.audio = None
+        self.camera = None
         self.username = ""
         self.after_id = None
         self.participants = {}
@@ -73,6 +73,7 @@ class VideoCallApp:
 
             self.login_frame.pack_forget()
             self.setup_videocall_ui(nickname, room)
+            self.audio = Audio()
             self.camera = Camera()
             self.client.threadEscuta()
             self.start_media()
@@ -199,7 +200,7 @@ class VideoCallApp:
         self.update_frame()
 
     def update_frame(self):
-        if self.video_running:
+        if self.video_running and self.camera:
             frame = self.camera.get_frame(self.username or "User")
             if frame is not None:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -219,7 +220,7 @@ class VideoCallApp:
         self.after_id = self.root.after(100, self.update_frame)
 
     def send_audio_loop(self):
-        while self.audio_running and self.client:
+        while self.audio_running and self.client and self.audio:
             try:
                 data = self.audio.read(1024)
                 self.client.enviarAudio(data)
@@ -238,7 +239,15 @@ class VideoCallApp:
             client = self.client
             self.client = None
             threading.Thread(target=client.desconectar, daemon=True).start()
-        self.camera.release()
+        
+        if self.camera:
+            self.camera.release()
+            self.camera = None
+        
+        if self.audio:
+            self.audio.release()
+            self.audio = None
+
         self.main_container.destroy()
         self.remote_displays = {}
         self.available_displays = []
