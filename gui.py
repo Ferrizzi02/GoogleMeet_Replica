@@ -23,7 +23,7 @@ class VideoCallApp:
         self.video_running = False
         self.audio_running = False
         self.audio = Audio()
-        self.camera = Camera()
+        #self.camera = Camera()
         self.username = ""
         self.after_id = None
         self.participants = {}
