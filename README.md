@@ -8,6 +8,7 @@ Ferramenta de videoconferência com suporte a texto, áudio e vídeo em Python 3
 - Vinícius Yuya Massuda - 834426
 - Ivan Fernando Rizzi Villalba - 821478
 - Gabriel de Souza Cavalca Leite - 813615
+- Nicolas Queiroz Bertozzo - 822070
 
 ---
 
